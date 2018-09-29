@@ -34,7 +34,7 @@ void WiFiManagerParameter::init(const char *id, const char *placeholder, const c
   _placeholder = placeholder;
   _length = length;
   _value = new char[length + 1];
-  for (int i = 0; i < length; i++) {
+  for (int i = 0; i < length + 1; i++) {
     _value[i] = 0;
   }
   if (defaultValue != NULL) {
@@ -42,6 +42,12 @@ void WiFiManagerParameter::init(const char *id, const char *placeholder, const c
   }
 
   _customHTML = custom;
+}
+
+WiFiManagerParameter::~WiFiManagerParameter() {
+  if (_value != NULL) {
+    delete[] _value;
+  }
 }
 
 const char* WiFiManagerParameter::getValue() {
@@ -61,13 +67,40 @@ const char* WiFiManagerParameter::getCustomHTML() {
 }
 
 WiFiManager::WiFiManager() {
+    _max_params = WIFI_MANAGER_MAX_PARAMS;
+    _params = (WiFiManagerParameter**)malloc(_max_params * sizeof(WiFiManagerParameter*));
 }
 
-void WiFiManager::addParameter(WiFiManagerParameter *p) {
+WiFiManager::~WiFiManager()
+{
+    if (_params != NULL)
+    {
+        DEBUG_WM(F("freeing allocated params!"));
+        free(_params);
+    }
+}
+
+bool WiFiManager::addParameter(WiFiManagerParameter *p) {
+  if(_paramsCount + 1 > _max_params)
+  {
+    // rezise the params array
+    _max_params += WIFI_MANAGER_MAX_PARAMS;
+    DEBUG_WM(F("Increasing _max_params to:"));
+    DEBUG_WM(_max_params);
+    WiFiManagerParameter** new_params = (WiFiManagerParameter**)realloc(_params, _max_params * sizeof(WiFiManagerParameter*));
+    if (new_params != NULL) {
+      _params = new_params;
+    } else {
+      DEBUG_WM(F("ERROR: failed to realloc params, size not increased!"));
+      return false;
+    }
+  }
+
   _params[_paramsCount] = p;
   _paramsCount++;
-  DEBUG_WM("Adding parameter");
+  DEBUG_WM(F("Adding parameter"));
   DEBUG_WM(p->getID());
+  return true;
 }
 
 void WiFiManager::setupConfigPortal() {
@@ -161,15 +194,34 @@ boolean WiFiManager::autoConnect(char const *apName, char const *apPassword) {
   return startConfigPortal(apName, apPassword);
 }
 
+boolean WiFiManager::configPortalHasTimeout(){
+    if(_configPortalTimeout == 0 || wifi_softap_get_station_num() > 0){
+      _configPortalStart = millis(); // kludge, bump configportal start time to skew timeouts
+      return false;
+    }
+    return (millis() > _configPortalStart + _configPortalTimeout);
+}
+
 boolean WiFiManager::startConfigPortal() {
   String ssid = "ESP" + String(ESP.getChipId());
   return startConfigPortal(ssid.c_str(), NULL);
 }
 
 boolean  WiFiManager::startConfigPortal(char const *apName, char const *apPassword) {
-  //setup AP
-  WiFi.mode(WIFI_AP_STA);
-  DEBUG_WM("SET AP STA");
+  
+  if(!WiFi.isConnected()){
+    WiFi.persistent(false);
+    // disconnect sta, start ap
+    WiFi.disconnect(); //  this alone is not enough to stop the autoconnecter
+    WiFi.mode(WIFI_AP);
+    WiFi.persistent(true);
+  } 
+  else {
+    //setup AP
+    WiFi.mode(WIFI_AP_STA);
+    DEBUG_WM(F("SET AP STA"));
+  }
+
 
   _apName = apName;
   _apPassword = apPassword;
@@ -182,7 +234,11 @@ boolean  WiFiManager::startConfigPortal(char const *apName, char const *apPasswo
   connect = false;
   setupConfigPortal();
 
-  while (_configPortalTimeout == 0 || millis() < _configPortalStart + _configPortalTimeout) {
+  while(1){
+
+    // check if timeout
+    if(configPortalHasTimeout()) break;
+
     //DNS
     dnsServer->processNextRequest();
     //HTTP
@@ -239,7 +295,7 @@ int WiFiManager::connectWifi(String ssid, String pass) {
   }
   //fix for auto connect racing issue
   if (WiFi.status() == WL_CONNECTED) {
-    DEBUG_WM("Already connected. Bailing out.");
+    DEBUG_WM(F("Already connected. Bailing out."));
     return WL_CONNECTED;
   }
   //check if we have ssid and pass and force those, if not, try with last saved values
@@ -247,7 +303,7 @@ int WiFiManager::connectWifi(String ssid, String pass) {
     WiFi.begin(ssid.c_str(), pass.c_str());
   } else {
     if (WiFi.SSID()) {
-      DEBUG_WM("Using last saved values, should be faster");
+      DEBUG_WM(F("Using last saved values, should be faster"));
       //trying to fix connection in progress hanging
       ETS_UART_INTR_DISABLE();
       wifi_station_disconnect();
@@ -255,21 +311,21 @@ int WiFiManager::connectWifi(String ssid, String pass) {
 
       WiFi.begin();
     } else {
-      DEBUG_WM("No saved credentials");
+      DEBUG_WM(F("No saved credentials"));
     }
   }
 
   int connRes = waitForConnectResult();
   DEBUG_WM ("Connection result: ");
   DEBUG_WM ( connRes );
-   #if 0
   //not connected, WPS enabled, no pass - first attempt
+  #ifdef NO_EXTRA_4K_HEAP
   if (_tryWPS && connRes != WL_CONNECTED && pass == "") {
     startWPS();
     //should be connected at the end of WPS
     connRes = waitForConnectResult();
   }
-   #endif
+  #endif
   return connRes;
 }
 
@@ -297,9 +353,9 @@ uint8_t WiFiManager::waitForConnectResult() {
 }
 
 void WiFiManager::startWPS() {
-  DEBUG_WM("START WPS");
+  DEBUG_WM(F("START WPS"));
   WiFi.beginWPSConfig();
-  DEBUG_WM("END WPS");
+  DEBUG_WM(F("END WPS"));
 }
 /*
   String WiFiManager::getSSID() {
@@ -477,7 +533,7 @@ void WiFiManager::handleWifi(WifiManagerWebServerRequestType *request, boolean s
   }
 
   page += FPSTR(WIFI_MANAGER_HTTP_FORM_START);
-  char parLength[2];
+  char parLength[5];
   // add the extra parameters to the form
   for (int i = 0; i < _paramsCount; i++) {
     if (_params[i] == NULL) {
@@ -489,7 +545,7 @@ void WiFiManager::handleWifi(WifiManagerWebServerRequestType *request, boolean s
       pitem.replace("{i}", _params[i]->getID());
       pitem.replace("{n}", _params[i]->getID());
       pitem.replace("{p}", _params[i]->getPlaceholder());
-      snprintf(parLength, 2, "%d", _params[i]->getValueLength());
+      snprintf(parLength, 5, "%d", _params[i]->getValueLength());
       pitem.replace("{l}", parLength);
       pitem.replace("{v}", _params[i]->getValue());
       pitem.replace("{c}", _params[i]->getCustomHTML());
@@ -561,7 +617,7 @@ void WiFiManager::handleWifiSave(WifiManagerWebServerRequestType *request) {
     //read parameter
     String value = request->arg(_params[i]->getID()).c_str();
     //store it in array
-    value.toCharArray(_params[i]->_value, _params[i]->_length);
+    value.toCharArray(_params[i]->_value, _params[i]->_length + 1);
     DEBUG_WM(F("Parameter"));
     DEBUG_WM(_params[i]->getID());
     DEBUG_WM(value);
@@ -663,22 +719,10 @@ void WiFiManager::handleReset(WifiManagerWebServerRequestType *request) {
   delay(2000);
 }
 
-
-
-//removed as mentioned here https://github.com/tzapu/WiFiManager/issues/114
-/*void WiFiManager::handle204() {
-  DEBUG_WM(F("204 No Response"));
-  server->sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-  server->sendHeader("Pragma", "no-cache");
-  server->sendHeader("Expires", "-1");
-  server->send ( 204, "text/plain", "");
-}*/
-
 void WiFiManager::handleNotFound(WifiManagerWebServerRequestType *request) {
   if (captivePortal(request)) { // If captive portal redirect instead of displaying the error page.
     return;
   }
-
   String message = "File Not Found\n\n";
   message += "URI: ";
 #ifdef WIFI_MANAGER_USE_ASYNC_WEB_SERVER
@@ -778,7 +822,7 @@ int WiFiManager::getRSSIasQuality(int RSSI) {
 
 /** Is this an IP? */
 boolean WiFiManager::isIp(String str) {
-  for (int i = 0; i < str.length(); i++) {
+  for (size_t i = 0; i < str.length(); i++) {
     int c = str.charAt(i);
     if (c != '.' && (c < '0' || c > '9')) {
       return false;

@@ -713,6 +713,7 @@ void WiFiManager::handleReset(WifiManagerWebServerRequestType *request) {
   request->send(200, "text/html", page);
 
   DEBUG_WM(F("Sent reset page"));
+  WiFi.disconnect(true);
   delay(5000);
   ESP.reset();
   delay(2000);

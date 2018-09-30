@@ -209,7 +209,18 @@ boolean WiFiManager::startConfigPortal() {
 
 boolean  WiFiManager::startConfigPortal(char const *apName, char const *apPassword) {
   
-  WiFi.mode(WIFI_AP_STA);
+  if(!WiFi.isConnected()){
+    WiFi.persistent(false);
+    // disconnect sta, start ap
+    WiFi.disconnect(); //  this alone is not enough to stop the autoconnecter
+    WiFi.mode(WIFI_AP);
+    WiFi.persistent(true);
+  } 
+  else {
+    //setup AP
+    WiFi.mode(WIFI_AP_STA);
+    DEBUG_WM(F("SET AP STA"));
+  }
 
   _apName = apName;
   _apPassword = apPassword;

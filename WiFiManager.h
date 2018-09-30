@@ -188,7 +188,7 @@ class WiFiManager
     boolean       isIp(String str);
     String        toStringIp(IPAddress ip);
 
-    boolean       connect;
+    volatile boolean       connect;
     boolean       _debug = true;
 
     void (*_apcallback)(WiFiManager*) = NULL;
